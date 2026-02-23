@@ -1,52 +1,83 @@
+from __future__ import annotations
+
 import pandas as pd
 
-def _to_number(x):
-    if x is None:
+
+def _as_str(v):
+    if pd.isna(v):
+        return None
+    s = str(v).strip()
+    if s == "":
+        return None
+    return s
+
+
+def _as_float(v):
+    if pd.isna(v) or v == "":
         return None
     try:
-        s = str(x).strip()
-        if s == "" or s.lower() == "nan":
-            return None
-        s = s.replace(",", "")
-        return float(s)
+        return float(v)
     except Exception:
+        # 有些是字串帶逗號
+        try:
+            return float(str(v).replace(",", "").strip())
+        except Exception:
+            return None
+
+
+def _as_int_like_str(v):
+    """
+    像 NCM 7315.0 這種，轉成 '7315'
+    """
+    if pd.isna(v):
         return None
+    try:
+        f = float(v)
+        if f.is_integer():
+            return str(int(f))
+        return str(v).strip()
+    except Exception:
+        return str(v).strip() if str(v).strip() else None
+
 
 def normalize_po_items(header: dict, items_raw: pd.DataFrame) -> pd.DataFrame:
-    if items_raw is None or len(items_raw) == 0:
-        return pd.DataFrame(columns=[
-            "po_no","supplier_name","seq","product_code","product_name_cn","product_name_pt","ncm",
-            "qty","unit_price_rmb","line_total_rmb"
-        ])
-
+    """
+    你的 Excel 欄位（我在檔案裡看到）：
+    序, 货号, 中文品名, 产品叙述, 规格, 件数, 装箱数/件, 订单数量, ...
+    单价 (RMB), 总金额 (RMB), 提单显示品名, 提单NCM, 葡文品名
+    """
     df = items_raw.copy()
 
-    df["po_no"] = header.get("po_no")
-    df["supplier_name"] = header.get("supplier_name")
+    # 欄位名可能有些空格差異，先做一次 strip
+    df.columns = [str(c).strip() for c in df.columns]
 
-    if "qty" in df.columns:
-        df["qty"] = df["qty"].apply(_to_number)
-    else:
-        df["qty"] = None
+    def col(*names):
+        for n in names:
+            if n in df.columns:
+                return n
+        return None
 
-    if "unit_price_rmb" in df.columns:
-        df["unit_price_rmb"] = df["unit_price_rmb"].apply(_to_number)
-    else:
-        df["unit_price_rmb"] = None
+    c_seq = col("序", "序号")
+    c_code = col("货号", "產品編號", "产品编号")
+    c_cn = col("中文品名", "品名(中文)")
+    c_pt = col("葡文品名", "品名(葡文)", "葡文名稱")
+    c_ncm = col("提单NCM", "NCM", "提单 NCM")
+    c_qty = col("订单数量", "数量", "訂單數量")
+    c_price = col("单价 (RMB)", "单价(RMB)", "单价")
+    c_total = col("总金额 (RMB)", "总金额(RMB)", "总金额")
 
-    # 文字欄位
-    for col in ["ncm","product_code","product_name_cn","product_name_pt"]:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-        else:
-            df[col] = ""
+    out = pd.DataFrame()
+    out["seq"] = df[c_seq].apply(_as_float) if c_seq else None
+    out["product_code"] = df[c_code].apply(_as_str) if c_code else None
+    out["product_name_cn"] = df[c_cn].apply(_as_str) if c_cn else None
+    out["product_name_pt"] = df[c_pt].apply(_as_str) if c_pt else None
+    out["ncm"] = df[c_ncm].apply(_as_int_like_str) if c_ncm else None
+    out["qty"] = df[c_qty].apply(_as_float) if c_qty else None
+    out["unit_price_rmb"] = df[c_price].apply(_as_float) if c_price else None
+    out["line_total_rmb"] = df[c_total].apply(_as_float) if c_total else None
 
-    df["line_total_rmb"] = (df["qty"].fillna(0) * df["unit_price_rmb"].fillna(0)).round(4)
+    # seq 轉 int（顯示更好看）
+    if "seq" in out.columns:
+        out["seq"] = out["seq"].apply(lambda x: int(x) if x is not None and float(x).is_integer() else x)
 
-    # 欄位排序
-    df = df[[
-        "po_no","supplier_name","seq","product_code","product_name_cn","product_name_pt","ncm",
-        "qty","unit_price_rmb","line_total_rmb"
-    ]]
-
-    return df
+    return out
