@@ -185,3 +185,4 @@ with tab2:
                 st.dataframe(df, use_container_width=True)
         finally:
             db.close()
+
